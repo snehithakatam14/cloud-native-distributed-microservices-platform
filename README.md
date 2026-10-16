@@ -242,3 +242,5 @@ kubectl logs -l app=notification-worker -n cloud-platform --tail=50
 | **CI/CD** | GitHub Actions: test → lint → build on every push |
 | **Dependency Injection** | FastAPI Depends(get_db) for DB session management |
 | **Event-Driven Architecture** | Producer-Consumer pattern via Redis queue |
+
+<!-- trigger ci -->
