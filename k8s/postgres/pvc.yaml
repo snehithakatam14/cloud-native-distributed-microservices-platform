@@ -1,0 +1,24 @@
+# PersistentVolumeClaim (PVC): requests storage from the cluster.
+#
+# Storage concepts:
+#   PersistentVolume (PV): actual storage on disk/cloud (provisioned by admin or dynamically)
+#   PersistentVolumeClaim (PVC): a REQUEST for storage by the app
+#   StorageClass: defines HOW storage is provisioned (Minikube uses 'standard' = hostPath)
+#
+# WHY: Without a PVC, PostgreSQL data lives inside the pod.
+# If the pod restarts, ALL DATA IS LOST (ephemeral storage).
+# PVC persists data to the node's disk, surviving pod restarts.
+#
+# ReadWriteOnce: only one node can mount this volume at a time.
+# For a single-replica DB this is fine. For multi-node clusters, use ReadWriteMany (NFS/EFS).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: cloud-platform
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

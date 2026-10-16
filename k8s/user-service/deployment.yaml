@@ -1,0 +1,89 @@
+# User Service Deployment
+#
+# replicas: 2 — High Availability (HA).
+# With 2 replicas, if one pod crashes, the other still serves traffic.
+# K8s Service load-balances requests across all healthy replicas (round-robin).
+# This demonstrates the 'A' in RAS: Availability.
+#
+# RollingUpdate strategy:
+#   maxSurge: 1       → can create 1 extra pod during update (so 3 pods briefly)
+#   maxUnavailable: 0 → never take a pod down before a new one is Ready
+# This achieves ZERO-DOWNTIME deployments. Critical for production platforms.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: cloud-platform
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+        - name: user-service
+          image: cloud-platform/user-service:latest
+          # imagePullPolicy: Never tells K8s NOT to pull from Docker Hub.
+          # Required for Minikube: images are built directly into Minikube's
+          # Docker daemon (eval $(minikube docker-env)), so they exist locally.
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8001
+          envFrom:
+            - configMapRef:
+                name: app-config
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "250m"
+              memory: "256Mi"
+          # LIVENESS PROBE: "Is this container alive?"
+          # If this fails 3 times → K8s RESTARTS the container.
+          # Use for: detecting deadlocks, infinite loops, unrecoverable states.
+          # initialDelaySeconds: wait for app startup before first check.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          # READINESS PROBE: "Is this container ready to receive traffic?"
+          # If this fails → K8s removes the pod from the Service's endpoint list.
+          # Traffic stops going to this pod (but it's NOT restarted).
+          # Use for: waiting for DB connection, cache warmup, dependency readiness.
+          # KEY DIFFERENCE from liveness: failure = remove from load balancer, not restart.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8001
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+---
+# ClusterIP Service: internal load balancer for user-service pods.
+# Other services in the cluster reach user-service at: http://user-service:8001
+# K8s iptables rules distribute traffic evenly across the 2 replicas.
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service
+  namespace: cloud-platform
+spec:
+  selector:
+    app: user-service
+  ports:
+    - port: 8001
+      targetPort: 8001
+  type: ClusterIP

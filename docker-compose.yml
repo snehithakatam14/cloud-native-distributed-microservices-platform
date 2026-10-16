@@ -1,0 +1,174 @@
+version: '3.8'
+
+# A single Docker network ties all containers together.
+# Bridge driver = default Docker networking — containers communicate
+# by service name (DNS). K8s uses a similar concept with ClusterIP Services.
+networks:
+  cloud-net:
+    driver: bridge
+
+volumes:
+  # Named volume for PostgreSQL data — survives container restarts.
+  # Without this, ALL data is lost every time the postgres container restarts.
+  postgres-data:
+
+services:
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    environment:
+      POSTGRES_DB: cloudplatform
+      POSTGRES_USER: clouduser
+      POSTGRES_PASSWORD: cloudpass
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - cloud-net
+    healthcheck:
+      # pg_isready checks if PostgreSQL is accepting connections.
+      # Other services use 'depends_on: condition: service_healthy'
+      # to wait for this before starting — prevents "connection refused" on startup.
+      test: ["CMD-SHELL", "pg_isready -U clouduser -d cloudplatform"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    networks:
+      - cloud-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Microservices ───────────────────────────────────────────────────────────
+
+  user-service:
+    build:
+      context: ./user-service
+      dockerfile: Dockerfile
+    container_name: user-service
+    environment:
+      # postgresql+psycopg2://user:pass@host:port/db
+      # 'postgres' resolves to the postgres container via Docker DNS
+      DATABASE_URL: postgresql+psycopg2://clouduser:cloudpass@postgres:5432/cloudplatform
+    ports:
+      - "8001:8001"
+    networks:
+      - cloud-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  order-service:
+    build:
+      context: ./order-service
+      dockerfile: Dockerfile
+    container_name: order-service
+    environment:
+      DATABASE_URL: postgresql+psycopg2://clouduser:cloudpass@postgres:5432/cloudplatform
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    ports:
+      - "8002:8002"
+    networks:
+      - cloud-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notification-api:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile.api
+    container_name: notification-api
+    environment:
+      DATABASE_URL: postgresql+psycopg2://clouduser:cloudpass@postgres:5432/cloudplatform
+    ports:
+      - "8003:8003"
+    networks:
+      - cloud-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  notification-worker:
+    build:
+      context: ./notification-service
+      dockerfile: Dockerfile.worker
+    container_name: notification-worker
+    environment:
+      DATABASE_URL: postgresql+psycopg2://clouduser:cloudpass@postgres:5432/cloudplatform
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    networks:
+      - cloud-net
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # always restart — if the worker crashes, K8s/Compose brings it back.
+    # This is the 'restartPolicy: Always' equivalent for Docker Compose.
+    restart: unless-stopped
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    container_name: api-gateway
+    environment:
+      # Gateway uses internal Docker DNS names — clients never see these
+      USER_SERVICE_URL: http://user-service:8001
+      ORDER_SERVICE_URL: http://order-service:8002
+      NOTIFICATION_SERVICE_URL: http://notification-api:8003
+    ports:
+      # Port 8000 is the ONLY port exposed to the host machine.
+      # All other services are internal — this is the single entry point.
+      - "8000:8000"
+    networks:
+      - cloud-net
+    depends_on:
+      - user-service
+      - order-service
+      - notification-api
+    restart: unless-stopped
+
+  # ── Observability ───────────────────────────────────────────────────────────
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    volumes:
+      # Mount our custom scrape config — tells Prometheus which targets to poll
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - cloud-net
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    ports:
+      - "3000:3000"
+    networks:
+      - cloud-net
+    # Grafana must start after Prometheus — it connects to Prometheus as a datasource
+    depends_on:
+      - prometheus
+    restart: unless-stopped

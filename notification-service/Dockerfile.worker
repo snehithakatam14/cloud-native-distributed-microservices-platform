@@ -1,0 +1,9 @@
+FROM python:3.11-slim
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+COPY . .
+# No EXPOSE needed — worker doesn't listen on any port.
+# It only connects OUT to Redis and PostgreSQL.
+# This is an important security property: worker has no inbound attack surface.
+CMD ["python", "worker.py"]

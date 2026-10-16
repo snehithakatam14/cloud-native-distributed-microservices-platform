@@ -1,0 +1,117 @@
+# Notification Service: two separate Deployments in one file.
+# The API (READ) and the Worker (WRITE) scale independently.
+
+# ─── 1. Notification API ─────────────────────────────────────────────────────
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-service
+  namespace: cloud-platform
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: notification-service
+  template:
+    metadata:
+      labels:
+        app: notification-service
+    spec:
+      containers:
+        - name: notification-api
+          image: cloud-platform/notification-api:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8003
+          envFrom:
+            - configMapRef:
+                name: app-config
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "200m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8003
+            initialDelaySeconds: 10
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: notification-service
+  namespace: cloud-platform
+spec:
+  selector:
+    app: notification-service
+  ports:
+    - port: 8003
+      targetPort: 8003
+  type: ClusterIP
+---
+# ─── 2. Notification Worker ───────────────────────────────────────────────────
+# The worker is a plain Python process — no HTTP server, no port.
+# It connects OUT to Redis (BRPOP) and PostgreSQL (INSERT).
+#
+# WHY no liveness/readiness HTTP probes?
+# The worker doesn't expose an HTTP port — probes would fail immediately.
+# Instead, K8s keeps it running via restartPolicy: Always (default for Deployments).
+# If worker.py crashes (exception or OOM), K8s auto-restarts the container.
+# This is the 'S' in RAS: Serviceability — the system self-heals.
+#
+# replicas: 2 — two workers consume from the same Redis queue concurrently.
+# Redis ensures each message is delivered to exactly ONE worker (BRPOP is atomic).
+# This doubles our notification processing throughput.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-worker
+  namespace: cloud-platform
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: notification-worker
+  template:
+    metadata:
+      labels:
+        app: notification-worker
+    spec:
+      containers:
+        - name: notification-worker
+          image: cloud-platform/notification-worker:latest
+          imagePullPolicy: Never
+          envFrom:
+            - configMapRef:
+                name: app-config
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "64Mi"
+            limits:
+              cpu: "150m"
+              memory: "128Mi"
+          # Liveness probe using a process check instead of HTTP:
+          # exec probes run a command inside the container.
+          # If worker.py is running, 'pgrep -f worker.py' exits 0 (success).
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-f", "worker.py"]
+            initialDelaySeconds: 15
+            periodSeconds: 15
+            failureThreshold: 3

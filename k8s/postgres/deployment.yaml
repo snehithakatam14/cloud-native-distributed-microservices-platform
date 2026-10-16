@@ -1,0 +1,72 @@
+# PostgreSQL Deployment
+#
+# NOTE: For production, use a StatefulSet (not Deployment) for databases.
+# StatefulSets give pods stable network identities and ordered startup/shutdown.
+# A Deployment is used here for simplicity since we have a single replica.
+#
+# replicas: 1 — databases are stateful; horizontal scaling requires replication
+# setup (e.g., Patroni for PostgreSQL HA). Out of scope for this project.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: cloud-platform
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:15
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: app-secrets
+          # Resource limits prevent this pod from consuming all node resources.
+          # Requests: guaranteed minimum allocation (scheduler uses this for placement).
+          # Limits: hard ceiling — pod is killed/throttled if it exceeds this.
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          volumeMounts:
+            - name: postgres-storage
+              mountPath: /var/lib/postgresql/data
+          # Readiness probe: K8s won't route traffic until pg_isready succeeds.
+          # This prevents app services from connecting before PostgreSQL is ready.
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "clouduser", "-d", "cloudplatform"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 10
+      volumes:
+        - name: postgres-storage
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+---
+# ClusterIP Service: exposes PostgreSQL internally within the cluster only.
+# Pods connect via DNS: postgres-service:5432
+# Never expose databases with NodePort or LoadBalancer (security risk).
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: cloud-platform
+spec:
+  selector:
+    app: postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP

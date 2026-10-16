@@ -1,0 +1,10 @@
+# Kubernetes Namespace: isolates all our resources from other workloads on the cluster.
+# In a shared cluster (like IBM Cloud IKS), namespaces act like virtual clusters.
+# Resource quotas, RBAC policies, and network policies can all be scoped per namespace.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cloud-platform
+  labels:
+    project: cloud-platform
+    environment: development

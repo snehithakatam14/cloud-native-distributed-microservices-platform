@@ -1,0 +1,45 @@
+# Prometheus Configuration
+#
+# Prometheus uses a PULL model (vs push-based systems like StatsD/Graphite).
+# Every scrape_interval seconds, Prometheus sends HTTP GET to each /metrics endpoint.
+# Services don't need to know Prometheus exists — they just expose /metrics.
+# This is ideal for cloud/K8s: services are ephemeral, Prometheus discovers them.
+#
+# In a full K8s setup, you'd use prometheus-operator with ServiceMonitor CRDs
+# for automatic service discovery. Here we use static_configs for simplicity.
+
+global:
+  # Scrape every 15 seconds — balances freshness vs storage overhead
+  scrape_interval: 15s
+  # Timeout per scrape attempt
+  scrape_timeout: 10s
+  # How often to re-evaluate alerting rules
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ── API Gateway ────────────────────────────────────────────────────────────
+  - job_name: "api-gateway"
+    static_configs:
+      - targets: ["api-gateway:8000"]
+    # metrics_path defaults to /metrics — matches our FastAPI endpoint
+
+  # ── User Service ──────────────────────────────────────────────────────────
+  - job_name: "user-service"
+    static_configs:
+      - targets: ["user-service:8001"]
+
+  # ── Order Service ─────────────────────────────────────────────────────────
+  - job_name: "order-service"
+    static_configs:
+      - targets: ["order-service:8002"]
+
+  # ── Notification Service ──────────────────────────────────────────────────
+  - job_name: "notification-service"
+    static_configs:
+      - targets: ["notification-service:8003"]
+
+  # ── Prometheus Self-Monitoring ────────────────────────────────────────────
+  # Prometheus monitors itself — useful for detecting if Prometheus is struggling
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]

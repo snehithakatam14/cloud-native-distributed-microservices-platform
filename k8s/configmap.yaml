@@ -1,0 +1,16 @@
+# ConfigMap stores non-sensitive configuration as key-value pairs.
+# In K8s, you NEVER hardcode env vars in Pod specs for things that change
+# per environment (dev/staging/prod). ConfigMap decouples config from code.
+# Sensitive values (passwords, tokens) go in Secrets, not ConfigMaps.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-config
+  namespace: default
+data:
+  # These values are injected as environment variables into each Pod
+  REDIS_HOST: "redis-service"
+  REDIS_PORT: "6379"
+  USER_SERVICE_URL: "http://user-service:8001"
+  ORDER_SERVICE_URL: "http://order-service:8002"
+  NOTIFICATION_SERVICE_URL: "http://notification-service:8003"

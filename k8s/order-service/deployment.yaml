@@ -1,0 +1,106 @@
+# Order Service Deployment + HPA (Horizontal Pod Autoscaler)
+#
+# The Order Service is the most compute-intensive: it writes to PostgreSQL
+# AND pushes to Redis on every POST. It's the best candidate for autoscaling.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+  namespace: cloud-platform
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: order-service
+  template:
+    metadata:
+      labels:
+        app: order-service
+    spec:
+      containers:
+        - name: order-service
+          image: cloud-platform/order-service:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8002
+          envFrom:
+            - configMapRef:
+                name: app-config
+          # Resource REQUESTS are critical for HPA:
+          # HPA calculates: (current CPU usage / requested CPU) * 100%
+          # If we don't set requests, HPA has no baseline to compare against.
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8002
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 3
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: order-service
+  namespace: cloud-platform
+spec:
+  selector:
+    app: order-service
+  ports:
+    - port: 8002
+      targetPort: 8002
+  type: ClusterIP
+---
+# HorizontalPodAutoscaler (HPA)
+#
+# HOW HPA WORKS:
+# 1. metrics-server runs in K8s and collects CPU/memory stats from kubelets
+# 2. HPA controller checks metrics every 15 seconds
+# 3. If avg CPU > 50% of requested: scale UP (add pods)
+# 4. If avg CPU < 50% for 5 minutes: scale DOWN (remove pods)
+# 5. HPA updates the Deployment's replicas field
+# 6. Deployment controller creates/removes pods accordingly
+#
+# Example: 2 pods, each using 80% CPU → HPA scales to 4 pods
+# After load drops: HPA scales back to minReplicas (2) after cooldown
+#
+# WHY 50% threshold?
+# Leaves headroom for traffic spikes before new pods are needed.
+# At 80-90% you're too close to the limit; new pods take ~30s to become Ready.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: order-service-hpa
+  namespace: cloud-platform
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: order-service
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
